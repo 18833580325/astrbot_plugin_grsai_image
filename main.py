@@ -1,5 +1,6 @@
 import re
 import time
+from json import JSONDecodeError
 from dataclasses import dataclass
 
 import httpx
@@ -161,8 +162,20 @@ class GrsaiImagePlugin(Star):
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
+            body_preview = response.text[:500].strip()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(
+                    f"HTTP {response.status_code}: {body_preview or exc.response.reason_phrase}"
+                ) from exc
+            try:
+                data = response.json()
+            except JSONDecodeError as exc:
+                content_type = response.headers.get("content-type", "unknown")
+                raise RuntimeError(
+                    f"接口没有返回 JSON。content-type={content_type}, body={body_preview or '<empty>'}"
+                ) from exc
 
         status = data.get("status")
         if status == "violation":

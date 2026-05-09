@@ -147,7 +147,7 @@ class GrsaiImagePlugin(Star):
 
     async def _call_grsai(self, image_req: ImageRequest, api_key: str) -> str:
         base_url = str(self.config.get("base_url", "https://grsai.dakka.com.cn")).strip().rstrip("/")
-        timeout = int(self.config.get("timeout_seconds", 180))
+        timeout = int(self.config.get("timeout_seconds", 600))
         url = f"{base_url}/v1/api/generate"
         headers = {
             "Authorization": f"Bearer {api_key.removeprefix('Bearer ').strip()}",
@@ -183,8 +183,8 @@ class GrsaiImagePlugin(Star):
         self, client: httpx.AsyncClient, base_url: str, headers: dict[str, str], task_id: str
     ) -> dict:
         result_url = f"{base_url}/v1/api/result"
-        interval = max(1, int(self.config.get("poll_interval_seconds", 5)))
-        max_wait = max(interval, int(self.config.get("max_poll_seconds", 180)))
+        interval = max(1, int(self.config.get("poll_interval_seconds", 10)))
+        max_wait = max(interval, int(self.config.get("max_poll_seconds", 600)))
         deadline = time.monotonic() + max_wait
 
         last_data = None

@@ -48,17 +48,17 @@
   "timeout_seconds": {
     "description": "请求超时时间",
     "type": "int",
-    "default": 180
+    "default": 600
   },
   "poll_interval_seconds": {
     "description": "异步轮询间隔秒数",
     "type": "int",
-    "default": 5
+    "default": 10
   },
   "max_poll_seconds": {
     "description": "最长等待生成秒数",
     "type": "int",
-    "default": 180
+    "default": 600
   },
   "cooldown_seconds": {
     "description": "单用户冷却秒数",

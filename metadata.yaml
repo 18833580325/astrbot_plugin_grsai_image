@@ -1,0 +1,6 @@
+name: astrbot_plugin_grsai_image
+display_name: GRSAI Image
+desc: Use GRSAI gpt-image-2 to generate images from QQ commands.
+version: v0.1.0
+author: Codex
+repo: ""

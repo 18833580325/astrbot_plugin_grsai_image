@@ -31,6 +31,13 @@
     "hint": "4K 请在命令里使用 --4k。",
     "default": "2k"
   },
+  "gpt_quality": {
+    "description": "GPT 图片质量参数",
+    "type": "string",
+    "options": ["high", "medium", "low", "auto"],
+    "hint": "成功流程里的 GPT 请求会发送 quality，建议先用 high。",
+    "default": "high"
+  },
   "reply_type": {
     "description": "GRSAI 回复类型",
     "type": "string",

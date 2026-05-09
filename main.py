@@ -163,6 +163,9 @@ class GrsaiImagePlugin(Star):
             "aspectRatio": image_req.aspect_ratio,
             "replyType": reply_type,
         }
+        quality = str(self.config.get("gpt_quality", "high")).strip()
+        if quality and quality != "auto":
+            payload["quality"] = quality
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, headers=headers, json=payload)

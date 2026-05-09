@@ -1,3 +1,4 @@
+import asyncio
 import re
 import time
 from json import JSONDecodeError
@@ -149,34 +150,72 @@ class GrsaiImagePlugin(Star):
         timeout = int(self.config.get("timeout_seconds", 180))
         url = f"{base_url}/v1/api/generate"
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {api_key.removeprefix('Bearer ').strip()}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "AstrBot-GRSAI-Image/0.2",
         }
+        reply_type = str(self.config.get("reply_type", "async")).strip() or "async"
         payload = {
             "model": image_req.model,
             "prompt": image_req.prompt,
             "images": [],
             "aspectRatio": image_req.aspect_ratio,
-            "replyType": "json",
+            "replyType": reply_type,
         }
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, headers=headers, json=payload)
-            body_preview = response.text[:500].strip()
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                raise RuntimeError(
-                    f"HTTP {response.status_code}: {body_preview or exc.response.reason_phrase}"
-                ) from exc
-            try:
-                data = response.json()
-            except JSONDecodeError as exc:
-                content_type = response.headers.get("content-type", "unknown")
-                raise RuntimeError(
-                    f"接口没有返回 JSON。content-type={content_type}, body={body_preview or '<empty>'}"
-                ) from exc
+            data = self._parse_response(response)
 
+            if reply_type == "async" or data.get("status") == "running":
+                task_id = data.get("id")
+                if not task_id:
+                    raise RuntimeError(f"异步任务没有返回 id: {data}")
+                data = await self._poll_result(client, base_url, headers, task_id)
+
+        return self._extract_image_url(data)
+
+    async def _poll_result(
+        self, client: httpx.AsyncClient, base_url: str, headers: dict[str, str], task_id: str
+    ) -> dict:
+        result_url = f"{base_url}/v1/api/result"
+        interval = max(1, int(self.config.get("poll_interval_seconds", 5)))
+        max_wait = max(interval, int(self.config.get("max_poll_seconds", 180)))
+        deadline = time.monotonic() + max_wait
+
+        last_data = None
+        while time.monotonic() <= deadline:
+            response = await client.get(result_url, headers=headers, params={"id": task_id})
+            data = self._parse_response(response)
+            last_data = data
+            status = data.get("status")
+            if status in {"succeeded", "failed", "violation"}:
+                return data
+            await asyncio.sleep(interval)
+
+        progress = ""
+        if isinstance(last_data, dict) and last_data.get("progress") is not None:
+            progress = f"，最后进度 {last_data.get('progress')}%"
+        raise RuntimeError(f"生成超时，任务 id={task_id}{progress}")
+
+    def _parse_response(self, response: httpx.Response) -> dict:
+        body_preview = response.text[:500].strip()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"HTTP {response.status_code}: {body_preview or exc.response.reason_phrase}"
+            ) from exc
+        try:
+            return response.json()
+        except JSONDecodeError as exc:
+            content_type = response.headers.get("content-type", "unknown")
+            raise RuntimeError(
+                f"接口没有返回 JSON。content-type={content_type}, body={body_preview or '<empty>'}"
+            ) from exc
+
+    def _extract_image_url(self, data: dict) -> str:
         status = data.get("status")
         if status == "violation":
             raise RuntimeError(data.get("error") or "内容可能违规，服务拒绝生成。")

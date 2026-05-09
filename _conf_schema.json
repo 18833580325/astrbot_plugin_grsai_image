@@ -34,11 +34,22 @@
   "reply_type": {
     "description": "GRSAI 回复类型",
     "type": "string",
-    "options": ["json"],
-    "default": "json"
+    "options": ["async", "json"],
+    "hint": "建议使用 async，由插件轮询 /v1/api/result 获取最终图片。",
+    "default": "async"
   },
   "timeout_seconds": {
     "description": "请求超时时间",
+    "type": "int",
+    "default": 180
+  },
+  "poll_interval_seconds": {
+    "description": "异步轮询间隔秒数",
+    "type": "int",
+    "default": 5
+  },
+  "max_poll_seconds": {
+    "description": "最长等待生成秒数",
     "type": "int",
     "default": 180
   },

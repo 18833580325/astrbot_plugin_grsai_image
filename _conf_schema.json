@@ -15,7 +15,7 @@
     "description": "默认模型",
     "type": "string",
     "options": ["gpt-image-2-vip", "gpt-image-2"],
-    "hint": "文档说明 2K/4K 仅 gpt-image-2-vip 支持。",
+    "hint": "2K/4K 建议使用 gpt-image-2-vip。",
     "default": "gpt-image-2-vip"
   },
   "default_ratio": {
@@ -35,7 +35,7 @@
     "description": "GPT 图片质量参数",
     "type": "string",
     "options": ["high", "medium", "low", "auto"],
-    "hint": "成功流程里的 GPT 请求会发送 quality，建议先用 high。",
+    "hint": "建议先使用 high。",
     "default": "high"
   },
   "reply_type": {
@@ -59,6 +59,12 @@
     "description": "最长等待生成秒数",
     "type": "int",
     "default": 600
+  },
+  "max_reference_images": {
+    "description": "最大参考图数量",
+    "type": "int",
+    "hint": "引用图片生图建议使用 1。数量越多，请求越大。",
+    "default": 1
   },
   "cooldown_seconds": {
     "description": "单用户冷却秒数",

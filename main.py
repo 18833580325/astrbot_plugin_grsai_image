@@ -1,4 +1,7 @@
 import asyncio
+import base64
+import mimetypes
+import os
 import re
 import time
 from json import JSONDecodeError
@@ -52,6 +55,7 @@ class ImageRequest:
     prompt: str
     aspect_ratio: str
     model: str
+    reference_images: list[str]
 
 
 @register(
@@ -86,7 +90,8 @@ class GrsaiImagePlugin(Star):
             return
 
         try:
-            image_req = self._parse_message(event.message_str)
+            reference_images = await self._collect_reference_images(event)
+            image_req = self._parse_message(event.message_str, reference_images)
         except ValueError as exc:
             yield event.plain_result(str(exc))
             return
@@ -159,7 +164,7 @@ class GrsaiImagePlugin(Star):
         elapsed = time.monotonic() - last_used
         return max(0, int(cooldown - elapsed))
 
-    def _parse_message(self, message: str) -> ImageRequest:
+    def _parse_message(self, message: str, reference_images: list[str]) -> ImageRequest:
         text = re.sub(r"^[/／]?(画图|生图|生成图片)\s*", "", message).strip()
         if not text:
             raise ValueError("请在命令后面写提示词，例如：/画图 一只边牧在直播间带货")
@@ -191,7 +196,120 @@ class GrsaiImagePlugin(Star):
             supported = "、".join(SIZE_TABLE.get(quality, SIZE_TABLE["2k"]).keys())
             raise ValueError(f"不支持 {quality} 的比例 {ratio}，可用比例：{supported}")
 
-        return ImageRequest(prompt=text, aspect_ratio=aspect_ratio, model=model)
+        return ImageRequest(
+            prompt=text,
+            aspect_ratio=aspect_ratio,
+            model=model,
+            reference_images=reference_images,
+        )
+
+    async def _collect_reference_images(self, event: AstrMessageEvent) -> list[str]:
+        max_images = int(self.config.get("max_reference_images", 1))
+        if max_images <= 0:
+            return []
+
+        sources = self._image_sources_from_components(getattr(event.message_obj, "message", []) or [])
+        if not sources:
+            reply_id = self._extract_reply_message_id(event)
+            if reply_id:
+                sources = await self._image_sources_from_reply(event, reply_id)
+
+        images = []
+        for source in sources[:max_images]:
+            try:
+                images.append(await self._source_to_data_url(source))
+            except Exception as exc:
+                logger.warning(f"Failed to load reference image {source}: {exc}")
+        return images
+
+    async def _image_sources_from_reply(self, event: AstrMessageEvent, message_id: str) -> list[str]:
+        bot = getattr(event, "bot", None)
+        api = getattr(bot, "api", None)
+        if not api:
+            return []
+        try:
+            ret = await api.call_action("get_msg", message_id=int(message_id))
+        except Exception as exc:
+            logger.warning(f"Failed to fetch replied message {message_id}: {exc}")
+            return []
+        message = ret.get("message") if isinstance(ret, dict) else getattr(ret, "message", None)
+        return self._image_sources_from_raw_message(message)
+
+    def _image_sources_from_components(self, components) -> list[str]:
+        sources = []
+        for component in components:
+            type_value = str(getattr(getattr(component, "type", ""), "value", getattr(component, "type", ""))).lower()
+            class_name = component.__class__.__name__.lower()
+            if "image" not in type_value and "image" not in class_name:
+                continue
+            for attr in ("url", "file", "file_", "path"):
+                value = getattr(component, attr, None)
+                if value:
+                    sources.append(str(value))
+                    break
+        return sources
+
+    def _image_sources_from_raw_message(self, message) -> list[str]:
+        sources = []
+        if not message:
+            return sources
+        for segment in list(message):
+            if isinstance(segment, dict):
+                seg_type = str(segment.get("type", "")).lower()
+                data = segment.get("data") or {}
+                if seg_type == "image":
+                    source = data.get("url") or data.get("file") or data.get("path")
+                    if source:
+                        sources.append(str(source))
+            else:
+                sources.extend(self._image_sources_from_components([segment]))
+        return sources
+
+    def _extract_reply_message_id(self, event: AstrMessageEvent) -> str | None:
+        for component in getattr(event.message_obj, "message", []) or []:
+            type_value = str(getattr(getattr(component, "type", ""), "value", getattr(component, "type", ""))).lower()
+            class_name = component.__class__.__name__.lower()
+            if "reply" in type_value or "reply" in class_name:
+                for attr in ("id", "message_id"):
+                    value = getattr(component, attr, None)
+                    if value:
+                        return str(value)
+
+        raw = getattr(event.message_obj, "raw_message", None)
+        raw_message = raw.get("message") if isinstance(raw, dict) else getattr(raw, "message", None)
+        if raw_message:
+            for segment in list(raw_message):
+                if isinstance(segment, dict) and str(segment.get("type", "")).lower() == "reply":
+                    data = segment.get("data") or {}
+                    value = data.get("id") or data.get("message_id")
+                    if value:
+                        return str(value)
+        return None
+
+    async def _source_to_data_url(self, source: str) -> str:
+        if source.startswith("data:image/"):
+            return source
+        if source.startswith("file://"):
+            source = source[7:]
+        if source.startswith("http://") or source.startswith("https://"):
+            timeout = int(self.config.get("timeout_seconds", 600))
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(source)
+                response.raise_for_status()
+                content = response.content
+                mime = response.headers.get("content-type", "").split(";")[0] or self._guess_mime(source)
+        else:
+            if not os.path.exists(source):
+                raise FileNotFoundError(source)
+            with open(source, "rb") as file:
+                content = file.read()
+            mime = self._guess_mime(source)
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+
+    def _guess_mime(self, source: str) -> str:
+        mime, _ = mimetypes.guess_type(source)
+        return mime or "image/png"
 
     async def _call_grsai(self, image_req: ImageRequest, api_key: str) -> str:
         base_url = str(self.config.get("base_url", "https://grsai.dakka.com.cn")).strip().rstrip("/")
@@ -207,10 +325,11 @@ class GrsaiImagePlugin(Star):
         payload = {
             "model": image_req.model,
             "prompt": image_req.prompt,
-            "images": [],
             "aspectRatio": image_req.aspect_ratio,
             "replyType": reply_type,
         }
+        if image_req.reference_images:
+            payload["images"] = image_req.reference_images
         quality = str(self.config.get("gpt_quality", "high")).strip()
         if quality and quality != "auto":
             payload["quality"] = quality

@@ -103,6 +103,54 @@ class GrsaiImagePlugin(Star):
 
         yield event.image_result(image_url)
 
+    @filter.command("image_help", alias={"图片帮助", "画图帮助", "生图帮助"})
+    async def image_help(self, event: AstrMessageEvent):
+        """Show image command usage, aspect ratios, and resolution examples."""
+        yield event.plain_result(
+            "\n".join(
+                [
+                    "GRSAI 画图帮助",
+                    "",
+                    "基础用法：",
+                    "/画图 提示词",
+                    "/生图 提示词",
+                    "",
+                    "设置长宽比：",
+                    "/画图 --ratio 16:9 提示词",
+                    "/画图 --ratio 9:16 提示词",
+                    "/画图 --ratio 1:1 提示词",
+                    "",
+                    "生成 4K：",
+                    "/画图 --4k --ratio 16:9 提示词",
+                    "16:9 4K = 3840x2160",
+                    "9:16 4K = 2160x3840",
+                    "1:1 4K = 2880x2880",
+                    "",
+                    "直接指定分辨率：",
+                    "/画图 --size 3840x2160 提示词",
+                    "/画图 --size 2048x2048 提示词",
+                    "",
+                    "常用 2K：",
+                    "1:1 = 2048x2048",
+                    "16:9 = 2048x1152",
+                    "9:16 = 1152x2048",
+                    "3:2 = 2048x1360",
+                    "2:3 = 1360x2048",
+                    "",
+                    "常用 4K：",
+                    "16:9 = 3840x2160",
+                    "9:16 = 2160x3840",
+                    "3:2 = 3504x2336",
+                    "2:3 = 2336x3504",
+                    "2:1 = 3840x1920",
+                    "1:2 = 1920x3840",
+                    "",
+                    "示例：",
+                    "/画图 --4k --ratio 16:9 雨夜赛博朋克城市，电影感，超清细节",
+                ]
+            )
+        )
+
     def _get_cooldown_left(self, sender_id: str) -> int:
         cooldown = int(self.config.get("cooldown_seconds", 60))
         if cooldown <= 0:
@@ -188,9 +236,17 @@ class GrsaiImagePlugin(Star):
         deadline = time.monotonic() + max_wait
 
         last_data = None
+        last_error = None
         while time.monotonic() <= deadline:
-            response = await client.get(result_url, headers=headers, params={"id": task_id})
-            data = self._parse_response(response)
+            try:
+                response = await client.get(result_url, headers=headers, params={"id": task_id})
+                data = self._parse_response(response)
+                last_error = None
+            except httpx.HTTPError as exc:
+                last_error = exc
+                logger.warning(f"GRSAI result polling transient error: {exc}")
+                await asyncio.sleep(interval)
+                continue
             last_data = data
             status = data.get("status")
             if status in {"succeeded", "failed", "violation"}:

@@ -60,11 +60,50 @@
     "type": "int",
     "default": 600
   },
+  "request_retry_seconds": {
+    "description": "请求断连重试秒数",
+    "type": "int",
+    "hint": "提交任务或轮询结果时，如果服务端临时断开连接，会在这段时间内重试。",
+    "default": 120
+  },
   "max_reference_images": {
     "description": "最大参考图数量",
     "type": "int",
     "hint": "引用图片生图建议使用 1。数量越多，请求越大。",
     "default": 1
+  },
+  "time_limit_enabled": {
+    "description": "启用禁用时间段",
+    "type": "bool",
+    "default": true
+  },
+  "disabled_start_time": {
+    "description": "禁用开始时间",
+    "type": "string",
+    "hint": "24小时制 HH:MM，例如 00:00。支持跨天时间段。",
+    "default": "00:00"
+  },
+  "disabled_end_time": {
+    "description": "禁用结束时间",
+    "type": "string",
+    "hint": "24小时制 HH:MM，例如 08:00。",
+    "default": "08:00"
+  },
+  "time_limit_reply": {
+    "description": "禁用时间段回复",
+    "type": "string",
+    "default": "画图功能在 00:00-08:00 暂停使用，请稍后再试。"
+  },
+  "daily_quota_limit": {
+    "description": "每日额度",
+    "type": "int",
+    "hint": "非白名单用户每天可成功生成的图片数量。0 表示不限制。",
+    "default": 3
+  },
+  "quota_exceeded_reply": {
+    "description": "额度用完回复",
+    "type": "string",
+    "default": "你今天的画图额度已用完（3 张/天），明天再来吧。"
   },
   "cooldown_seconds": {
     "description": "单用户冷却秒数",
@@ -72,9 +111,31 @@
     "default": 60
   },
   "allowed_user_ids": {
-    "description": "允许使用的 QQ 号白名单",
+    "description": "白名单用户 QQ 号",
     "type": "list",
-    "hint": "留空表示所有人可用。填写字符串 QQ 号，例如 [\"123456\"]。",
+    "hint": "白名单用户不受禁用时间段和每日额度限制。填写字符串 QQ 号，例如 [\"123456\"]。",
     "default": []
+  },
+  "restricted_user_ids": {
+    "description": "限制可用用户 QQ 号",
+    "type": "list",
+    "hint": "留空表示所有非黑名单用户都可用；不为空时，只有白名单和此列表用户可用。",
+    "default": []
+  },
+  "blacklist_user_ids": {
+    "description": "黑名单用户 QQ 号",
+    "type": "list",
+    "hint": "黑名单用户不能使用画图功能。",
+    "default": []
+  },
+  "blacklist_reply": {
+    "description": "黑名单回复",
+    "type": "string",
+    "default": "你已被加入画图黑名单，无法使用该功能。"
+  },
+  "not_allowed_reply": {
+    "description": "非允许用户回复",
+    "type": "string",
+    "default": "你暂时没有使用画图功能的权限。"
   }
 }

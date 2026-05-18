@@ -1,11 +1,14 @@
 import asyncio
 import base64
+import json
 import mimetypes
 import os
 import re
 import time
-from json import JSONDecodeError
 from dataclasses import dataclass
+from datetime import datetime
+from json import JSONDecodeError
+from pathlib import Path
 
 import httpx
 from astrbot.api import AstrBotConfig, logger
@@ -62,21 +65,23 @@ class ImageRequest:
     "astrbot_plugin_grsai_image",
     "Codex",
     "Use GRSAI gpt-image-2 to generate images.",
-    "0.1.0",
+    "0.2.0",
 )
 class GrsaiImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         self._last_used: dict[str, float] = {}
+        self._quota_file = Path("/AstrBot/data/plugin_data/grsai_image/quota_usage.json")
+        self._quota_usage = self._load_quota_usage()
 
     @filter.command("画图", alias={"生图", "生成图片"})
     async def generate_image(self, event: AstrMessageEvent):
         """使用 GRSAI 生成图片。示例：/画图 --ratio 16:9 --4k 赛博朋克城市夜景"""
         sender_id = str(event.get_sender_id())
-        allowed_ids = [str(item) for item in self.config.get("allowed_user_ids", [])]
-        if allowed_ids and sender_id not in allowed_ids:
-            yield event.plain_result("你暂时没有使用画图功能的权限。")
+        policy_error = self._check_usage_policy(sender_id)
+        if policy_error:
+            yield event.plain_result(policy_error)
             return
 
         api_key = str(self.config.get("api_key", "")).strip()
@@ -97,7 +102,8 @@ class GrsaiImagePlugin(Star):
             return
 
         self._last_used[sender_id] = time.monotonic()
-        yield event.plain_result(f"已收到，正在生成图片：{image_req.aspect_ratio}")
+        ref_text = f"，参考图 {len(image_req.reference_images)} 张" if image_req.reference_images else ""
+        yield event.plain_result(f"已收到，正在生成图片：{image_req.aspect_ratio}{ref_text}")
 
         try:
             image_url = await self._call_grsai(image_req, api_key)
@@ -106,6 +112,7 @@ class GrsaiImagePlugin(Star):
             yield event.plain_result(f"生成失败：{exc}")
             return
 
+        self._record_quota_usage(sender_id)
         yield event.image_result(image_url)
 
     @filter.command("image_help", alias={"图片帮助", "画图帮助", "生图帮助"})
@@ -135,6 +142,10 @@ class GrsaiImagePlugin(Star):
                     "/画图 --size 3840x2160 提示词",
                     "/画图 --size 2048x2048 提示词",
                     "",
+                    "图生图：",
+                    "引用一张图片，然后发 /画图 提示词",
+                    "或在同一条消息里带图并写 /画图 提示词",
+                    "",
                     "常用 2K：",
                     "1:1 = 2048x2048",
                     "16:9 = 2048x1152",
@@ -155,6 +166,95 @@ class GrsaiImagePlugin(Star):
                 ]
             )
         )
+
+    def _check_usage_policy(self, sender_id: str) -> str | None:
+        if sender_id in self._string_list("blacklist_user_ids"):
+            return str(self.config.get("blacklist_reply", "你已被加入画图黑名单，无法使用该功能。"))
+
+        if sender_id in self._string_list("allowed_user_ids"):
+            return None
+
+        restricted_ids = self._string_list("restricted_user_ids")
+        if restricted_ids and sender_id not in restricted_ids:
+            return str(self.config.get("not_allowed_reply", "你暂时没有使用画图功能的权限。"))
+
+        disabled_reason = self._disabled_time_reason()
+        if disabled_reason:
+            return disabled_reason
+
+        daily_limit = int(self.config.get("daily_quota_limit", 3))
+        if daily_limit > 0 and self._quota_used_today(sender_id) >= daily_limit:
+            return str(
+                self.config.get(
+                    "quota_exceeded_reply",
+                    f"你今天的画图额度已用完（{daily_limit} 张/天），明天再来吧。",
+                )
+            )
+        return None
+
+    def _disabled_time_reason(self) -> str | None:
+        if not bool(self.config.get("time_limit_enabled", True)):
+            return None
+        start = str(self.config.get("disabled_start_time", "00:00"))
+        end = str(self.config.get("disabled_end_time", "08:00"))
+        start_time = self._parse_hhmm(start)
+        end_time = self._parse_hhmm(end)
+        if not start_time or not end_time:
+            return None
+
+        now = datetime.now().time()
+        if start_time <= end_time:
+            disabled = start_time <= now < end_time
+        else:
+            disabled = now >= start_time or now < end_time
+        if not disabled:
+            return None
+        return str(self.config.get("time_limit_reply", f"画图功能在 {start}-{end} 暂停使用，请稍后再试。"))
+
+    def _parse_hhmm(self, value: str):
+        try:
+            return datetime.strptime(value.strip(), "%H:%M").time()
+        except ValueError:
+            logger.warning(f"Invalid time config: {value}")
+            return None
+
+    def _quota_key(self) -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _quota_used_today(self, sender_id: str) -> int:
+        return int(self._quota_usage.get(self._quota_key(), {}).get(sender_id, 0))
+
+    def _record_quota_usage(self, sender_id: str):
+        if sender_id in self._string_list("allowed_user_ids"):
+            return
+        day = self._quota_key()
+        self._quota_usage.setdefault(day, {})
+        self._quota_usage[day][sender_id] = int(self._quota_usage[day].get(sender_id, 0)) + 1
+        for key in list(self._quota_usage.keys()):
+            if key != day:
+                self._quota_usage.pop(key, None)
+        self._save_quota_usage()
+
+    def _load_quota_usage(self) -> dict:
+        try:
+            if self._quota_file.exists():
+                with open(self._quota_file, "r", encoding="utf-8") as file:
+                    data = json.load(file)
+                return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            logger.warning(f"Failed to load GRSAI quota usage: {exc}")
+        return {}
+
+    def _save_quota_usage(self):
+        try:
+            self._quota_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._quota_file, "w", encoding="utf-8") as file:
+                json.dump(self._quota_usage, file, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.warning(f"Failed to save GRSAI quota usage: {exc}")
+
+    def _string_list(self, key: str) -> list[str]:
+        return [str(item).strip() for item in self.config.get(key, []) if str(item).strip()]
 
     def _get_cooldown_left(self, sender_id: str) -> int:
         cooldown = int(self.config.get("cooldown_seconds", 60))
@@ -335,7 +435,14 @@ class GrsaiImagePlugin(Star):
             payload["quality"] = quality
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, headers=headers, json=payload)
+            response = await self._request_with_retries(
+                client,
+                "POST",
+                url,
+                retry_label="generate",
+                headers=headers,
+                json=payload,
+            )
             data = self._parse_response(response)
 
             if reply_type == "async" or data.get("status") == "running":
@@ -358,7 +465,15 @@ class GrsaiImagePlugin(Star):
         last_error = None
         while time.monotonic() <= deadline:
             try:
-                response = await client.get(result_url, headers=headers, params={"id": task_id})
+                response = await self._request_with_retries(
+                    client,
+                    "GET",
+                    result_url,
+                    retry_label="result",
+                    headers=headers,
+                    params={"id": task_id},
+                    max_retry_seconds=interval,
+                )
                 data = self._parse_response(response)
                 last_error = None
             except httpx.HTTPError as exc:
@@ -375,16 +490,38 @@ class GrsaiImagePlugin(Star):
         progress = ""
         if isinstance(last_data, dict) and last_data.get("progress") is not None:
             progress = f"，最后进度 {last_data.get('progress')}%"
+        if last_error:
+            progress = f"{progress}，最后错误：{last_error}"
         raise RuntimeError(f"生成超时，任务 id={task_id}{progress}")
+
+    async def _request_with_retries(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        retry_label: str,
+        max_retry_seconds: int | None = None,
+        **kwargs,
+    ) -> httpx.Response:
+        interval = max(1, int(self.config.get("poll_interval_seconds", 10)))
+        max_retry_seconds = max_retry_seconds or int(self.config.get("request_retry_seconds", 120))
+        deadline = time.monotonic() + max_retry_seconds
+
+        while True:
+            try:
+                return await client.request(method, url, **kwargs)
+            except httpx.HTTPError as exc:
+                if time.monotonic() >= deadline:
+                    raise
+                logger.warning(f"GRSAI {retry_label} transient error, retrying: {exc}")
+                await asyncio.sleep(interval)
 
     def _parse_response(self, response: httpx.Response) -> dict:
         body_preview = response.text[:500].strip()
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise RuntimeError(
-                f"HTTP {response.status_code}: {body_preview or exc.response.reason_phrase}"
-            ) from exc
+            raise RuntimeError(f"HTTP {response.status_code}: {body_preview or exc.response.reason_phrase}") from exc
         try:
             return response.json()
         except JSONDecodeError as exc:
@@ -402,12 +539,11 @@ class GrsaiImagePlugin(Star):
         if status != "succeeded":
             progress = data.get("progress")
             suffix = f"，当前进度 {progress}%" if progress is not None else ""
-            raise RuntimeError(f"任务状态为 {status}{suffix}，当前版本插件使用 json 同步返回。")
+            raise RuntimeError(f"任务状态为 {status}{suffix}。")
 
         results = data.get("results") or []
         if not results or not results[0].get("url"):
             raise RuntimeError("接口返回成功，但没有图片 URL。")
-
         return results[0]["url"]
 
     async def terminate(self):

@@ -171,7 +171,7 @@ class GrsaiImagePlugin(Star):
         if sender_id in self._string_list("blacklist_user_ids"):
             return str(self.config.get("blacklist_reply", "你已被加入画图黑名单，无法使用该功能。"))
 
-        if sender_id in self._string_list("allowed_user_ids"):
+        if self._is_quota_exempt(sender_id):
             return None
 
         restricted_ids = self._string_list("restricted_user_ids")
@@ -225,7 +225,7 @@ class GrsaiImagePlugin(Star):
         return int(self._quota_usage.get(self._quota_key(), {}).get(sender_id, 0))
 
     def _record_quota_usage(self, sender_id: str):
-        if sender_id in self._string_list("allowed_user_ids"):
+        if self._is_quota_exempt(sender_id):
             return
         day = self._quota_key()
         self._quota_usage.setdefault(day, {})
@@ -255,6 +255,9 @@ class GrsaiImagePlugin(Star):
 
     def _string_list(self, key: str) -> list[str]:
         return [str(item).strip() for item in self.config.get(key, []) if str(item).strip()]
+
+    def _is_quota_exempt(self, sender_id: str) -> bool:
+        return sender_id in self._string_list("allowed_user_ids") or sender_id in self._string_list("admin_user_ids")
 
     def _get_cooldown_left(self, sender_id: str) -> int:
         cooldown = int(self.config.get("cooldown_seconds", 60))

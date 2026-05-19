@@ -113,13 +113,7 @@
   "allowed_user_ids": {
     "description": "白名单用户 QQ 号",
     "type": "list",
-    "hint": "白名单用户不受禁用时间段和每日额度限制。填写字符串 QQ 号，例如 [\"123456\"]。",
-    "default": []
-  },
-  "admin_user_ids": {
-    "description": "管理员用户 QQ 号",
-    "type": "list",
-    "hint": "管理员用户不受禁用时间段和每日额度限制。黑名单优先级仍然最高。",
+    "hint": "额外白名单用户不受禁用时间段和每日额度限制。AstrBot 全局管理员会自动豁免，不需要在这里重复填写。黑名单优先级仍然最高。",
     "default": []
   },
   "restricted_user_ids": {

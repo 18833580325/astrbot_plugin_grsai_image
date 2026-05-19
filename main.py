@@ -52,6 +52,20 @@ SIZE_TABLE = {
     },
 }
 
+ASTRBOT_ADMIN_CONFIG_KEYS = {
+    "admins",
+    "admin_ids",
+    "admins_id",
+    "admin_users",
+    "admin_user_ids",
+    "admin_qq",
+    "admin_qqs",
+    "administrator_ids",
+    "administrators",
+    "superusers",
+    "super_users",
+}
+
 
 @dataclass
 class ImageRequest:
@@ -73,6 +87,7 @@ class GrsaiImagePlugin(Star):
         self.config = config
         self._last_used: dict[str, float] = {}
         self._quota_file = Path("/AstrBot/data/plugin_data/grsai_image/quota_usage.json")
+        self._astrbot_config_file = Path("/AstrBot/data/cmd_config.json")
         self._quota_usage = self._load_quota_usage()
 
     @filter.command("画图", alias={"生图", "生成图片"})
@@ -257,7 +272,50 @@ class GrsaiImagePlugin(Star):
         return [str(item).strip() for item in self.config.get(key, []) if str(item).strip()]
 
     def _is_quota_exempt(self, sender_id: str) -> bool:
-        return sender_id in self._string_list("allowed_user_ids") or sender_id in self._string_list("admin_user_ids")
+        return sender_id in self._string_list("allowed_user_ids") or sender_id in self._astrbot_admin_ids()
+
+    def _astrbot_admin_ids(self) -> set[str]:
+        try:
+            with open(self._astrbot_config_file, "r", encoding="utf-8-sig") as file:
+                data = json.load(file)
+        except FileNotFoundError:
+            return set()
+        except Exception as exc:
+            logger.warning(f"Failed to read AstrBot admin config: {exc}")
+            return set()
+
+        admin_ids: set[str] = set()
+
+        def add_value(value):
+            if isinstance(value, bool):
+                return
+            if isinstance(value, (str, int)):
+                text = str(value).strip()
+                if text:
+                    admin_ids.add(text)
+                return
+            if isinstance(value, list):
+                for item in value:
+                    add_value(item)
+                return
+            if isinstance(value, dict):
+                for item_key in ("id", "qq", "user_id", "uin"):
+                    if item_key in value:
+                        add_value(value[item_key])
+
+        def walk(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    normalized_key = str(key).strip().lower().replace("-", "_")
+                    if normalized_key in ASTRBOT_ADMIN_CONFIG_KEYS:
+                        add_value(item)
+                    walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+
+        walk(data)
+        return admin_ids
 
     def _get_cooldown_left(self, sender_id: str) -> int:
         cooldown = int(self.config.get("cooldown_seconds", 60))

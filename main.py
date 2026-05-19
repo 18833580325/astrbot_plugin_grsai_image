@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from json import JSONDecodeError
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from astrbot.api import AstrBotConfig, logger
@@ -217,7 +218,7 @@ class GrsaiImagePlugin(Star):
         if not start_time or not end_time:
             return None
 
-        now = datetime.now().time()
+        now = datetime.now(self._local_timezone()).time()
         if start_time <= end_time:
             disabled = start_time <= now < end_time
         else:
@@ -234,7 +235,15 @@ class GrsaiImagePlugin(Star):
             return None
 
     def _quota_key(self) -> str:
-        return datetime.now().strftime("%Y-%m-%d")
+        return datetime.now(self._local_timezone()).strftime("%Y-%m-%d")
+
+    def _local_timezone(self) -> ZoneInfo:
+        timezone_name = str(self.config.get("timezone", "Asia/Shanghai")).strip() or "Asia/Shanghai"
+        try:
+            return ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            logger.warning(f"Invalid timezone config: {timezone_name}, fallback to Asia/Shanghai")
+            return ZoneInfo("Asia/Shanghai")
 
     def _quota_used_today(self, sender_id: str) -> int:
         return int(self._quota_usage.get(self._quota_key(), {}).get(sender_id, 0))

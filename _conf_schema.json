@@ -77,6 +77,12 @@
     "type": "bool",
     "default": true
   },
+  "timezone": {
+    "description": "时间判断时区",
+    "type": "string",
+    "hint": "用于禁用时间段和每日额度重置。中国大陆建议保持 Asia/Shanghai。",
+    "default": "Asia/Shanghai"
+  },
   "disabled_start_time": {
     "description": "禁用开始时间",
     "type": "string",

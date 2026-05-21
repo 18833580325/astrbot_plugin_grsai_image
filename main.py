@@ -15,6 +15,7 @@ import httpx
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
+from astrbot.core.agent.message import ImageURLPart, TextPart, UserMessageSegment
 
 
 SIZE_TABLE = {
@@ -126,6 +127,21 @@ class GrsaiImagePlugin(Star):
         except Exception as exc:
             logger.error(f"GRSAI image generation failed: {exc}")
             yield event.plain_result(f"生成失败：{exc}")
+            return
+
+        try:
+            allowed, reason = await self._review_image_url(image_url, image_req, event)
+        except Exception as exc:
+            logger.error(f"GRSAI image review failed: {exc}")
+            if bool(self.config.get("vision_review_fail_closed", False)):
+                yield event.plain_result(f"图片审核失败，已停止发送：{exc}")
+                return
+            allowed, reason = True, ""
+
+        if not allowed:
+            if reason:
+                logger.warning(f"GRSAI image blocked by vision review: {reason}")
+            yield event.plain_result(str(self.config.get("vision_block_reply", "您生成的内容被拦截。")))
             return
 
         self._record_quota_usage(sender_id)
@@ -278,7 +294,13 @@ class GrsaiImagePlugin(Star):
             logger.warning(f"Failed to save GRSAI quota usage: {exc}")
 
     def _string_list(self, key: str) -> list[str]:
-        return [str(item).strip() for item in self.config.get(key, []) if str(item).strip()]
+        value = self.config.get(key, [])
+        if isinstance(value, str):
+            value = value.replace("\n", ",").split(",")
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    def _is_review_exempt(self, sender_id: str) -> bool:
+        return sender_id in self._string_list("review_exempt_user_ids")
 
     def _is_quota_exempt(self, sender_id: str) -> bool:
         return sender_id in self._string_list("allowed_user_ids") or sender_id in self._astrbot_admin_ids()
@@ -615,6 +637,104 @@ class GrsaiImagePlugin(Star):
         if not results or not results[0].get("url"):
             raise RuntimeError("接口返回成功，但没有图片 URL。")
         return results[0]["url"]
+
+    async def _review_image_url(
+        self, image_url: str, image_req: ImageRequest, event: AstrMessageEvent
+    ) -> tuple[bool, str]:
+        if self._is_review_exempt(str(event.get_sender_id())):
+            logger.info("GRSAI vision review skipped for review-exempt user.")
+            return True, ""
+
+        if not bool(self.config.get("vision_review_enabled", False)):
+            return True, ""
+
+        mode = str(self.config.get("vision_review_mode", "astrbot_caption")).strip() or "astrbot_caption"
+        if mode == "off":
+            return True, ""
+        if mode not in {"astrbot_caption", "astrbot_current"}:
+            raise RuntimeError(f"未知视觉审核模式：{mode}")
+
+        provider_id = await self._get_astrbot_review_provider_id(mode, event)
+        if not provider_id:
+            raise RuntimeError("没有找到可用的 AstrBot 视觉审核 Provider，请先配置图片描述模型。")
+
+        user_msg = UserMessageSegment(
+            content=[
+                TextPart(text=self._build_review_prompt(image_req)),
+                ImageURLPart(image_url=ImageURLPart.ImageURL(url=image_url)),
+            ]
+        )
+        llm_resp = await self.context.llm_generate(
+            chat_provider_id=provider_id,
+            contexts=[user_msg],
+        )
+        content = getattr(llm_resp, "completion_text", "") or ""
+        review = self._parse_review_json(content)
+        allow = bool(review.get("allow", False))
+        reason = str(review.get("reason", "")).strip()
+        if not allow and not reason:
+            reason = "视觉审核未提供具体原因。"
+        return allow, reason
+
+    async def _get_astrbot_review_provider_id(self, mode: str, event: AstrMessageEvent) -> str:
+        if mode == "astrbot_current":
+            provider_id = await self.context.get_current_chat_provider_id(self._event_umo(event))
+            return str(provider_id or "").strip()
+
+        config = self._load_astrbot_config()
+        provider_settings = config.get("provider_settings", {}) if isinstance(config, dict) else {}
+        provider_id = provider_settings.get("default_image_caption_provider_id", "")
+        if provider_id:
+            return str(provider_id).strip()
+
+        provider_id = await self.context.get_current_chat_provider_id(self._event_umo(event))
+        return str(provider_id or "").strip()
+
+    def _event_umo(self, event: AstrMessageEvent) -> str:
+        return str(getattr(event.message_obj, "unified_msg_origin", "") or "")
+
+    def _load_astrbot_config(self) -> dict:
+        try:
+            with open(self._astrbot_config_file, "r", encoding="utf-8-sig") as file:
+                data = json.load(file)
+            return data if isinstance(data, dict) else {}
+        except FileNotFoundError:
+            return {}
+        except Exception as exc:
+            logger.warning(f"Failed to load AstrBot config: {exc}")
+            return {}
+
+    def _build_review_prompt(self, image_req: ImageRequest) -> str:
+        review_prompt = str(self.config.get("vision_review_prompt", "")).strip()
+        if not review_prompt:
+            review_prompt = (
+                "你是图片发送前的视觉审核器。只判断图片是否包含不适合发送的色情或性内容。"
+                "只审查可见画面本身，不审查图片里的文字、水印、签名、标语、logo、政治文字或其他文本内容。"
+                "需要拦截：裸露性器官、明确性交或性行为、明显色情姿势、真实人物色情、未成年人或疑似未成年人色情。"
+                "可以放行：普通泳装、正常亲密姿势、非色情的艺术人体、图片中出现文字但画面本身不色情的内容。"
+                "只返回 JSON，不要 Markdown。格式：{\"allow\": true, \"reason\": \"\"}。"
+            )
+        return (
+            f"{review_prompt}\n\n"
+            "原始提示词如下，只能作为辅助理解画面，不要根据文字内容本身做拦截：\n"
+            f"{image_req.prompt}"
+        )
+
+    def _parse_review_json(self, content: str) -> dict:
+        content = content.strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?\s*", "", content)
+            content = re.sub(r"\s*```$", "", content)
+        match = re.search(r"\{.*\}", content, flags=re.S)
+        if match:
+            content = match.group(0)
+        try:
+            data = json.loads(content)
+        except Exception as exc:
+            raise RuntimeError(f"视觉审核返回不是 JSON：{content[:500]}") from exc
+        if not isinstance(data, dict) or "allow" not in data:
+            raise RuntimeError(f"视觉审核 JSON 缺少 allow 字段：{data}")
+        return data
 
     async def terminate(self):
         pass

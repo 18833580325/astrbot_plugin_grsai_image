@@ -143,5 +143,42 @@
     "description": "非允许用户回复",
     "type": "string",
     "default": "你暂时没有使用画图功能的权限。"
+  },
+  "vision_review_enabled": {
+    "description": "启用生成后色情审核",
+    "type": "bool",
+    "hint": "开启后，图片会先交给 AstrBot 视觉模型审核；只审查色情视觉内容，不审查图片文字、水印、标志等文本内容。",
+    "default": false
+  },
+  "vision_review_mode": {
+    "description": "视觉审核模型来源",
+    "type": "string",
+    "options": ["astrbot_caption", "astrbot_current", "off"],
+    "hint": "astrbot_caption 使用 AstrBot 图片描述模型；astrbot_current 使用当前会话模型；off 表示不审核。",
+    "default": "astrbot_caption"
+  },
+  "review_exempt_user_ids": {
+    "description": "免审查用户 QQ 号",
+    "type": "list",
+    "hint": "这些用户生成图片时跳过视觉审核；不影响额度、禁用时间和黑名单规则。黑名单仍然优先。",
+    "default": []
+  },
+  "vision_review_fail_closed": {
+    "description": "审核失败时禁止发送",
+    "type": "bool",
+    "hint": "开启后，如果视觉审核模型报错或不可用，图片不会发送；关闭则审核失败时放行。",
+    "default": false
+  },
+  "vision_block_reply": {
+    "description": "色情审核拦截回复",
+    "type": "string",
+    "hint": "发送给用户的简短提示；具体拦截原因只写入后台日志。",
+    "default": "您生成的内容被拦截。"
+  },
+  "vision_review_prompt": {
+    "description": "色情审核提示词",
+    "type": "string",
+    "hint": "要求模型只返回 JSON：{\"allow\": true/false, \"reason\": \"...\"}。请保持只审核色情视觉内容，不审核文字内容。",
+    "default": "你是图片发送前的视觉审核器。只判断图片是否包含不适合发送的色情或性内容。只审查可见画面本身，不审查图片里的文字、水印、签名、标语、logo、政治文字或其他文本内容。需要拦截：裸露性器官、明确性交或性行为、明显色情姿势、真实人物色情、未成年人或疑似未成年人色情。可以放行：普通泳装、正常亲密姿势、非色情的艺术人体、图片中出现文字但画面本身不色情的内容。只返回 JSON，不要 Markdown。格式：{\"allow\": true, \"reason\": \"\"}。"
   }
 }

@@ -19,6 +19,7 @@ AstrBot 的 GRSAI `gpt-image-2` / `gpt-image-2-vip` 画图插件。
 - `base_url`: `https://grsai.dakka.com.cn` 或 `https://grsaiapi.com`。
 - `model`: 推荐 `gpt-image-2-vip`，支持 2K/4K。
 - `cooldown_seconds`: 单用户冷却时间。
+- `active_generation_reply`: 同一个用户上一条画图任务没结束时的回复。
 - `allowed_user_ids`: 白名单，不受额度和禁用时段限制。
 - `restricted_user_ids`: 留空表示所有非黑名单用户可用；不为空时，只允许白名单和此列表用户使用。
 - `blacklist_user_ids`: 黑名单，不能使用画图功能。

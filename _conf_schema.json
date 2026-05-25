@@ -116,6 +116,12 @@
     "type": "int",
     "default": 60
   },
+  "active_generation_reply": {
+    "description": "同用户任务未完成回复",
+    "type": "string",
+    "hint": "同一个用户上一条画图指令还没结束时，再次触发画图会回复这句话。",
+    "default": "你上一张图片还没有生成完成，请等结束后再试。"
+  },
   "allowed_user_ids": {
     "description": "白名单用户 QQ 号",
     "type": "list",

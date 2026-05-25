@@ -91,6 +91,7 @@ class GrsaiImagePlugin(Star):
         self._quota_file = Path("/AstrBot/data/plugin_data/grsai_image/quota_usage.json")
         self._astrbot_config_file = Path("/AstrBot/data/cmd_config.json")
         self._quota_usage = self._load_quota_usage()
+        self._active_generations: set[str] = set()
 
     @filter.command("画图", alias={"生图", "生成图片"})
     async def generate_image(self, event: AstrMessageEvent):
@@ -106,46 +107,54 @@ class GrsaiImagePlugin(Star):
             yield event.plain_result("GRSAI API Key 还没配置，请先在插件配置里填写 api_key。")
             return
 
+        if sender_id in self._active_generations:
+            yield event.plain_result(str(self.config.get("active_generation_reply", "你上一张图片还没有生成完成，请等结束后再试。")))
+            return
+
         cooldown_left = self._get_cooldown_left(sender_id)
         if cooldown_left > 0:
             yield event.plain_result(f"画图冷却中，还需要等待 {cooldown_left} 秒。")
             return
 
+        self._active_generations.add(sender_id)
         try:
-            reference_images = await self._collect_reference_images(event)
-            image_req = self._parse_message(event.message_str, reference_images)
-        except ValueError as exc:
-            yield event.plain_result(str(exc))
-            return
-
-        self._last_used[sender_id] = time.monotonic()
-        ref_text = f"，参考图 {len(image_req.reference_images)} 张" if image_req.reference_images else ""
-        yield event.plain_result(f"已收到，正在生成图片：{image_req.aspect_ratio}{ref_text}")
-
-        try:
-            image_url = await self._call_grsai(image_req, api_key)
-        except Exception as exc:
-            logger.error(f"GRSAI image generation failed: {exc}")
-            yield event.plain_result(f"生成失败：{exc}")
-            return
-
-        try:
-            allowed, reason = await self._review_image_url(image_url, image_req, event)
-        except Exception as exc:
-            logger.error(f"GRSAI image review failed: {exc}")
-            if bool(self.config.get("vision_review_fail_closed", False)):
-                yield event.plain_result(f"图片审核失败，已停止发送：{exc}")
+            try:
+                reference_images = await self._collect_reference_images(event)
+                image_req = self._parse_message(event.message_str, reference_images)
+            except ValueError as exc:
+                yield event.plain_result(str(exc))
                 return
-            allowed, reason = True, ""
 
-        if not allowed:
-            if reason:
-                logger.warning(f"GRSAI image blocked by vision review: {reason}")
-            yield event.plain_result(str(self.config.get("vision_block_reply", "您生成的内容被拦截。")))
-            return
+            self._last_used[sender_id] = time.monotonic()
+            ref_text = f"，参考图 {len(image_req.reference_images)} 张" if image_req.reference_images else ""
+            yield event.plain_result(f"已收到，正在生成图片：{image_req.aspect_ratio}{ref_text}")
 
-        self._record_quota_usage(sender_id)
-        yield event.image_result(image_url)
+            try:
+                image_url = await self._call_grsai(image_req, api_key)
+            except Exception as exc:
+                logger.error(f"GRSAI image generation failed: {exc}")
+                yield event.plain_result(f"生成失败：{exc}")
+                return
+
+            try:
+                allowed, reason = await self._review_image_url(image_url, image_req, event)
+            except Exception as exc:
+                logger.error(f"GRSAI image review failed: {exc}")
+                if bool(self.config.get("vision_review_fail_closed", False)):
+                    yield event.plain_result(f"图片审核失败，已停止发送：{exc}")
+                    return
+                allowed, reason = True, ""
+
+            if not allowed:
+                if reason:
+                    logger.warning(f"GRSAI image blocked by vision review: {reason}")
+                yield event.plain_result(str(self.config.get("vision_block_reply", "您生成的内容被拦截。")))
+                return
+
+            self._record_quota_usage(sender_id)
+            yield event.image_result(image_url)
+        finally:
+            self._active_generations.discard(sender_id)
 
     @filter.command("image_help", alias={"图片帮助", "画图帮助", "生图帮助"})
     async def image_help(self, event: AstrMessageEvent):

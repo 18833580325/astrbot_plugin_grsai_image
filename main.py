@@ -677,13 +677,43 @@ class GrsaiImagePlugin(Star):
             chat_provider_id=provider_id,
             contexts=[user_msg],
         )
-        content = getattr(llm_resp, "completion_text", "") or ""
+        content = self._llm_response_text(llm_resp)
         review = self._parse_review_json(content)
         allow = bool(review.get("allow", False))
         reason = str(review.get("reason", "")).strip()
         if not allow and not reason:
             reason = "视觉审核未提供具体原因。"
         return allow, reason
+
+    def _llm_response_text(self, llm_resp) -> str:
+        if isinstance(llm_resp, str):
+            text = llm_resp.strip()
+        else:
+            text = (getattr(llm_resp, "completion_text", "") or "").strip()
+        return self._extract_sse_completion_text(text) or text
+
+    def _extract_sse_completion_text(self, text: str) -> str:
+        if "data:" not in text:
+            return ""
+        parts = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload)
+            except Exception:
+                continue
+            for choice in data.get("choices", []) or []:
+                delta = choice.get("delta") or {}
+                message = choice.get("message") or {}
+                for value in (delta.get("content"), message.get("content"), choice.get("text")):
+                    if isinstance(value, str) and value:
+                        parts.append(value)
+        return "".join(parts).strip()
 
     async def _get_astrbot_review_provider_id(self, mode: str, event: AstrMessageEvent) -> str:
         if mode == "astrbot_current":
